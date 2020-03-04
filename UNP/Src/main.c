@@ -33,7 +33,15 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define PAINEL_BUFFSIZE 21
 
+#define MLX90614_ADDR 0x5A
+#define MLX90614_TA 0x06
+#define MLX90614_TOBJ 0x07
+
+#define MPU6050_ADDR 0x68
+#define MPU6050_ACELEROMETRO 0X3B
+#define MPU6050_GIROSCOPIO 0X43
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -42,7 +50,7 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-I2C_HandleTypeDef hi2c1;
+I2C_HandleTypeDef hi2c2;
 
 TIM_HandleTypeDef htim2;
 
@@ -57,8 +65,28 @@ DMA_HandleTypeDef hdma_usart2_tx;
 		2: combustivel (atribuido valor 1 quando estiver na reserva)
 		3: marcha engatada
 		4: barra estabilizadora (atribuido valor 1 quando...)
+
+	infTelemetria
+		5: temperatura ambiente lsb
+		6: temperatura ambiente msb
+		7: temperatura objeto lsb
+		8: temperatura objeto msb
+		9: g_x msb
+		10: g_x lsb
+		11: g_y msb
+		12: g_y lsb
+		13: g_z msb
+		14: g_z lsb
+		15: a_x msb
+		16: a_x lsb
+		17: a_y msb
+		18: a_y lsb
+		19: a_z msb
+		20: a_z lsb
  */
-uint8_t informacoesPainel[5] = {0,0,0,0,0};
+uint8_t informacoesPainel[PAINEL_BUFFSIZE];
+uint8_t bufTemp[3];
+uint8_t bufMPU[6];
 uint8_t pulsosRotacao = 0;
 uint8_t pulsosVelocidade = 0;
 uint8_t marchaEngatada = 0;
@@ -74,7 +102,7 @@ static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_USART2_UART_Init(void);
-static void MX_I2C1_Init(void);
+static void MX_I2C2_Init(void);
 /* USER CODE BEGIN PFP */
 void verificaRotacao();
 void verificaVelocidade();
@@ -82,6 +110,12 @@ void verificaCombustivel();
 void entraReserva();
 void saiReserva();
 void verificaMarchaEngatada();
+void temperaturaAmbiente();
+void temperaturaObjeto();
+void leTemperatura(uint8_t reg);
+void leituraGiroscopio();
+void leituraAcelerometro();
+void leituraRegMPU(uint8_t reg);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -113,7 +147,9 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-
+  for(int i = 0; i < 21; i++){
+	  informacoesPainel[i] = 0;
+  }
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
@@ -121,10 +157,14 @@ int main(void)
   MX_DMA_Init();
   MX_TIM2_Init();
   MX_USART2_UART_Init();
-  MX_I2C1_Init();
+  MX_I2C2_Init();
   /* USER CODE BEGIN 2 */
   HAL_TIM_Base_Start_IT(&htim2);
-  //HAL_DMA_Init(&hdma_usart2_tx);
+
+  uint8_t Data = 0;
+  HAL_I2C_Mem_Write(&hi2c2, (MPU6050_ADDR<<1), 0x6B, 1,&Data, 1, 1000);
+  Data = 0x07;
+  HAL_I2C_Mem_Write(&hi2c2, (MPU6050_ADDR<<1), 0x19, 1, &Data, 1, 1000);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -152,7 +192,9 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
-  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI_DIV2;
+  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL2;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -161,7 +203,7 @@ void SystemClock_Config(void)
   */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
@@ -173,36 +215,36 @@ void SystemClock_Config(void)
 }
 
 /**
-  * @brief I2C1 Initialization Function
+  * @brief I2C2 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_I2C1_Init(void)
+static void MX_I2C2_Init(void)
 {
 
-  /* USER CODE BEGIN I2C1_Init 0 */
+  /* USER CODE BEGIN I2C2_Init 0 */
 
-  /* USER CODE END I2C1_Init 0 */
+  /* USER CODE END I2C2_Init 0 */
 
-  /* USER CODE BEGIN I2C1_Init 1 */
+  /* USER CODE BEGIN I2C2_Init 1 */
 
-  /* USER CODE END I2C1_Init 1 */
-  hi2c1.Instance = I2C1;
-  hi2c1.Init.ClockSpeed = 100000;
-  hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
-  hi2c1.Init.OwnAddress1 = 0;
-  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
-  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
-  hi2c1.Init.OwnAddress2 = 0;
-  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
-  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+  /* USER CODE END I2C2_Init 1 */
+  hi2c2.Instance = I2C2;
+  hi2c2.Init.ClockSpeed = 100000;
+  hi2c2.Init.DutyCycle = I2C_DUTYCYCLE_2;
+  hi2c2.Init.OwnAddress1 = 0;
+  hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c2.Init.OwnAddress2 = 0;
+  hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c2) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN I2C1_Init 2 */
+  /* USER CODE BEGIN I2C2_Init 2 */
 
-  /* USER CODE END I2C1_Init 2 */
+  /* USER CODE END I2C2_Init 2 */
 
 }
 
@@ -267,7 +309,7 @@ static void MX_USART2_UART_Init(void)
 
   /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
-  huart2.Init.BaudRate = 9600;
+  huart2.Init.BaudRate = 115200;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
   huart2.Init.StopBits = UART_STOPBITS_1;
   huart2.Init.Parity = UART_PARITY_NONE;
@@ -362,9 +404,14 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
 	verificaRotacao();
 	verificaVelocidade();
+	verificaCombustivel();
 	verificaMarchaEngatada();
 	informacoesPainel[4] = HAL_GPIO_ReadPin(Barra_Estab_GPIO_Port, GPIO_PIN_10);
-	HAL_UART_Transmit_DMA(&huart2, informacoesPainel, 5);
+	temperaturaAmbiente();
+	temperaturaObjeto();
+	leituraGiroscopio();
+	leituraAcelerometro();
+	HAL_UART_Transmit_DMA(&huart2, informacoesPainel, PAINEL_BUFFSIZE);
 }
 
 void verificaRotacao(){
@@ -406,10 +453,11 @@ void verificaVelocidade(){
 	if(contadorSegundosVel == 2){
 		informacoesPainel[1] = pulsosVelocidade * 1.413675; //velocidade = pulsos * (2*pi/4) * raio[0.25] * tempo[1] * 3,6
 		pulsosVelocidade = 0;
+		contadorSegundosVel = 0;
 		HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
 	}
 }
-/*
+
 void verificaCombustivel(){
 	if(informacoesPainel[2] == 0){
 		entraReserva();
@@ -447,7 +495,7 @@ void saiReserva(){
 		contadorCapacitivo = 0;
 	}
 }
-*/
+
 void verificaMarchaEngatada(){
 	if(HAL_GPIO_ReadPin(Marcha_Posicao1_GPIO_Port, GPIO_PIN_15) == 1 &&
 			HAL_GPIO_ReadPin(Marcha_Posicao2_GPIO_Port, GPIO_PIN_0) == 1){
@@ -464,6 +512,42 @@ void verificaMarchaEngatada(){
 		}
 	}
 }
+
+void temperaturaAmbiente(){
+	leTemperatura(MLX90614_TA);
+	informacoesPainel[5] = bufTemp[0];
+	informacoesPainel[6] = bufTemp[1];
+}
+
+void temperaturaObjeto(){
+	leTemperatura(MLX90614_TOBJ);
+	informacoesPainel[7] = bufTemp[0];
+	informacoesPainel[8] = bufTemp[1];
+}
+
+void leTemperatura(uint8_t reg){
+	HAL_I2C_Mem_Read(&hi2c2, (MLX90614_ADDR<<1), reg, 1, bufTemp, 3, 100);
+
+}
+
+void leituraGiroscopio(){
+	leituraRegMPU(MPU6050_GIROSCOPIO);
+	for(int i = 0; i < 6; i++){
+		informacoesPainel[9+i] = bufMPU[i];
+	}
+}
+
+void leituraAcelerometro(){
+	leituraRegMPU(MPU6050_ACELEROMETRO);
+	for(int i = 0; i < 6; i++){
+		informacoesPainel[15+i] = bufMPU[i];
+	}
+}
+
+void leituraRegMPU(uint8_t reg){
+	HAL_I2C_Mem_Read(&hi2c2, (MPU6050_ADDR<<1), reg, 1, bufMPU, 6, 100);
+}
+
 /* USER CODE END 4 */
 
 /**
